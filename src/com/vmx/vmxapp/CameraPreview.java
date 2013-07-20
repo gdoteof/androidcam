@@ -1,25 +1,38 @@
 package com.vmx.vmxapp;
 
-import java.io.IOException;
 import java.util.List;
 
 import android.content.Context;
+import android.content.res.Configuration;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.hardware.Camera;
 import android.hardware.Camera.Size;
 import android.util.Log;
+import android.view.Display;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.WindowManager;
 
 /** A basic Camera preview class */
 public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback {
 	private String TAG;
     private SurfaceHolder mHolder;
     private SurfaceView mSurfaceView;
-    private Camera mCamera;
+    public Camera mCamera;
     private List<Size> mSupportedPreviewSizes;
+    
+    private Context mContext;
+    private Camera.CameraInfo mCameraInfo;
+    private Size mOptimalSizeLandscape = null;
+    private Size mOptimalSizePortrait = null;
+    private int mCameraOpenedOrientation;
 
     public CameraPreview(Context context, Camera camera) {
         super(context);
+        mContext = context;
         mCamera = camera;
         // Install a SurfaceHolder.Callback so we get notified when the
         // underlying surface is created and destroyed.
@@ -30,49 +43,27 @@ public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback
         
     }
 
-    
-    public void setCamera(Camera camera) {
-        if (mCamera == camera) { return; }
         
-        stopPreviewAndFreeCamera();
-
-        
-        mCamera = camera;
-
-        
-        if (mCamera != null) {
-            List<Size> localSizes = mCamera.getParameters().getSupportedPreviewSizes();
-            Log.d("vmxerror",mCamera.getParameters().flatten());
-            mSupportedPreviewSizes = localSizes;
-            requestLayout();
-          
-            try {
-                mCamera.setPreviewDisplay(mHolder);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-          
-            /*
-              Important: Call startPreview() to start updating the preview surface. Preview must 
-              be started before you can take a picture.
-              */
-            mCamera.startPreview();
-        }
-    }
-    
     public void surfaceCreated(SurfaceHolder holder) {
-        // The Surface has been created, now tell the camera where to draw the preview.
-        try {
-            mCamera.setPreviewDisplay(holder);
-            mCamera.startPreview();
-        } catch (IOException e) {
-            Log.d(TAG, "Error setting camera preview (in surface created): " + e.getMessage());
-        }
+    	Camera.CameraInfo cameraInfo = new Camera.CameraInfo();
+        int numberOfCameras = Camera.getNumberOfCameras();
 
+        for (int i = 0; i < numberOfCameras; i++) {
+            Camera.getCameraInfo(i, cameraInfo);
+            if (cameraInfo.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+                if (mCamera != null) {
+                    mCamera.stopPreview();
+                    mCamera.release();
+                    mCamera = null;
+                }
+                mCamera = Camera.open(i);
+                mCameraInfo = cameraInfo;
+            }
+        }
     }
 
 
-    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         // If your preview can change or rotate, take care of those events here.
         // Make sure to stop the preview before resizing or reformatting it.
 
@@ -81,30 +72,55 @@ public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback
           return;
         }
 
-        // stop preview before making changes
-        try {
-            mCamera.stopPreview();
-        } catch (Exception e){
-        	
-          // ignore: tried to stop a non-existent preview
-        }
-
-        // set preview size and make any resize, rotate or
-        // reformatting changes here
-        Camera.Parameters camParams = mCamera.getParameters();
-        Size pSize = camParams.getPreferredPreviewSizeForVideo();
-        camParams.setPreviewSize(pSize.width,pSize.height);
-        mCamera.setParameters(camParams);
-
         // start preview with new settings
-        try {
-            mCamera.setPreviewDisplay(mHolder);
-            mCamera.startPreview();
-
-        } catch (Exception e){
-        	TAG = "vmxapp";
-            Log.d(TAG, "Error starting camera preview (in surface changed): " + e.getMessage());
+        
+        if(mCamera != null){
+	        mCamera.stopPreview();
         }
+        Display display = ((WindowManager) mContext.getSystemService(mContext.WINDOW_SERVICE)).getDefaultDisplay();
+
+        int rotation = display.getRotation();
+        int degrees = 0;
+        int result;
+
+        switch (rotation) {
+            case Surface.ROTATION_0:
+                degrees = 0;
+                break;
+            case Surface.ROTATION_90:
+                degrees = 90;
+                break;
+            case Surface.ROTATION_180:
+                degrees = 180;
+                break;
+            case Surface.ROTATION_270:
+                degrees = 270;
+                break;
+        }
+
+        if (mCameraInfo.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            result = (mCameraInfo.orientation + degrees) % 360;
+            result = (360 - result) % 360;  // compensate the mirror
+        } else {  // back-facing
+            result = (mCameraInfo.orientation - degrees + 360) % 360;
+        }
+
+        mCamera.setDisplayOrientation(result);
+        if (mCameraOpenedOrientation == Configuration.ORIENTATION_PORTRAIT) {
+            setCameraOrientationOnOpen(width, height); //sets correct ratio
+        }
+        new Thread(new Runnable() {
+        	public void run() {
+		        try{
+		        	mCamera.setPreviewDisplay(mHolder);
+					mCamera.startPreview();
+		        }	
+		        catch(Exception e){
+		        	Log.d("vmxerror", e.getMessage());
+		        }
+        	}
+        }).start();
+
     }
     
     public void surfaceDestroyed(SurfaceHolder holder) {
@@ -114,28 +130,120 @@ public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback
               Call stopPreview() to stop updating the preview surface.
             */
             mCamera.stopPreview();
+            mCamera.release();
+            mCamera = null;
         }
     }
 
-    /**
-      * When this function returns, mCamera will be null.
-      */
-    private void stopPreviewAndFreeCamera() {
+    public void setCameraOrientationOnOpen(int w, int h) {
+        Size cameraSize;
+        mCamera.stopPreview();
+        final float rotation = getRotation();
+        Camera.Parameters currentCameraParameters = mCamera.getParameters();
+        List<Camera.Size> previewSizes = currentCameraParameters.getSupportedPreviewSizes();
+        cameraSize = getOptimalPreviewSize(previewSizes, h, w);
 
-        if (mCamera != null) {
-            /*
-              Call stopPreview() to stop updating the preview surface.
-            */
-            mCamera.stopPreview();
-        
-            /*
-              Important: Call release() to release the camera for use by other applications. 
-              Applications should release the camera immediately in onPause() (and re-open() it in
-              onResume()).
-            */
-            mCamera.release();
-        
-            mCamera = null;
+        currentCameraParameters.setPreviewSize(cameraSize.width, cameraSize.height);
+        mCamera.setParameters(currentCameraParameters);
+        if (rotation == 90 || rotation == 270) {
+            float ratio = 100;
+            if (cameraSize.width < mSurfaceView.getLayoutParams().height) {
+                ratio = (mSurfaceView.getLayoutParams().height * 100) / cameraSize.width;
+            }
+            if (cameraSize.height < mSurfaceView.getLayoutParams().width) {
+                ratio = (mSurfaceView.getLayoutParams().width * 100) / cameraSize.height;
+            }
+
+            mSurfaceView.getLayoutParams().height = (int) ((cameraSize.width * ratio) / 100);
+            mSurfaceView.getLayoutParams().width = (int) ((cameraSize.height * ratio) / 100);
         }
+        new Thread(new Runnable() {
+        	public void run() {
+		        try{
+			        mCamera.setDisplayOrientation((int)rotation);
+			        mCamera.startPreview();
+		        }	
+		        catch(Exception e){
+		        	Log.d("vmxerror", e.getMessage());
+		        }
+        	}
+        }).start();
+    }
+    
+    public float getRotation() {
+        Display display = ((WindowManager) mContext.getSystemService(mContext.WINDOW_SERVICE)).getDefaultDisplay();
+
+        int rotation = display.getRotation();
+        int degrees = 0;
+        int result;
+
+        switch (rotation) {
+            case Surface.ROTATION_0:
+                degrees = 0;
+                break;
+            case Surface.ROTATION_90:
+                degrees = 90;
+                break;
+            case Surface.ROTATION_180:
+                degrees = 180;
+                break;
+            case Surface.ROTATION_270:
+                degrees = 270;
+                break;
+        }
+        result = (mCameraInfo.orientation + degrees) % 360;
+        result = (360 - result) % 360;  // compensate the mirror
+        return result;
+    }
+    
+    
+    public Size getOptimalPreviewSize(List<Size> sizes, int w, int h) {
+        boolean isLanscape = false;
+        if (getRotation() == 0 || getRotation() == 180)
+            isLanscape = true;
+
+        if (isLanscape && mOptimalSizeLandscape != null) //landscape
+        {
+            return mOptimalSizeLandscape;
+        } else if (!isLanscape && mOptimalSizePortrait != null) //portrait
+        {
+            return mOptimalSizePortrait;
+        }
+
+        final double ASPECT_TOLERANCE = 0.1;
+        double targetRatio = (double) w / h;
+        if (sizes == null) return null;
+
+        Size optimalSize = null;
+        double minDiff = Double.MAX_VALUE;
+
+        int targetHeight = h + 500;
+
+        // Try to find an size match aspect ratio and size
+        for (Size size : sizes) {
+            double ratio = (double) size.width / size.height;
+            if (Math.abs(ratio - targetRatio) > ASPECT_TOLERANCE) continue;
+            if (Math.abs(size.height - targetHeight) < minDiff) {
+                optimalSize = size;
+                minDiff = Math.abs(size.height - targetHeight);
+            }
+        }
+
+        // Cannot find the one match the aspect ratio, ignore the requirement
+        if (optimalSize == null) {
+            minDiff = Double.MAX_VALUE;
+            for (Size size : sizes) {
+                if (Math.abs(size.height - targetHeight) < minDiff) {
+                    optimalSize = size;
+                    minDiff = Math.abs(size.height - targetHeight);
+                }
+            }
+        }
+        if (isLanscape) {
+            mOptimalSizeLandscape = optimalSize;
+        } else if (!isLanscape) {
+            mOptimalSizePortrait = optimalSize;
+        }
+        return optimalSize;
     }
 }

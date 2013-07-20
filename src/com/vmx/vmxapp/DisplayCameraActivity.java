@@ -1,10 +1,7 @@
 package com.vmx.vmxapp;
 
-import java.util.List;
-
 import android.app.Activity;
 import android.hardware.Camera;
-import android.hardware.Camera.Size;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
@@ -52,31 +49,6 @@ public class DisplayCameraActivity extends Activity {
 		getMenuInflater().inflate(R.menu.display_camera, menu);
 		return true;
 	}
-	
-	private boolean safeCameraOpen(int id) {
-	    boolean qOpened = false;
-	  
-	    try {
-	        releaseCameraAndPreview();
-	        mCamera = Camera.open(id);
-	        qOpened = (mCamera != null);
-	    } catch (Exception e) {
-	        Log.e(getString(R.string.app_name), "failed to open Camera");
-	        e.printStackTrace();
-	    }
-
-	    return qOpened;    
-	}
-
-	private void releaseCameraAndPreview() {
-	    mPreview.setCamera(null);
-	    if (mCamera != null) {
-	        mCamera.release();
-	        mCamera = null;
-	    }
-	}
-	
-	/** A safe way to get an instance of the Camera object. */
 
 	public static Camera getCameraInstance(){
 		   Camera c = null;
@@ -85,7 +57,6 @@ public class DisplayCameraActivity extends Activity {
 		   }
 		   catch (Exception e){
 			   Log.d("vmxerror", "camera didn't open:" + e.getMessage());
-			   
 		       // Camera is not available (in use or does not exist)
 		   }
 		   if(c==null){
